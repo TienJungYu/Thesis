@@ -1,0 +1,175 @@
+clc; clear; close all;
+% ====== 參數設定 ======
+n_repeat = 100; % 重複次數
+n = 500; p = 2; K = 2;
+beta_true  = [1 -1; -1 2];
+alpha_true = [2, 4];
+pi_true    = [0.6, 0.4];
+
+% 儲存每次估計結果
+pi_store    = zeros(n_repeat, K);
+beta_store  = zeros(n_repeat, p, K);
+alpha_store = zeros(n_repeat, K);
+
+for rep = 1:n_repeat
+    %% ====== Step 0: Data Simulation via Inverse CDF ======
+    x_vals = normrnd(0,1,n,1);
+    X      = [ones(n,1), x_vals];
+    z = randsample(1:K, n, true, pi_true);
+    y = zeros(n,1);
+    for i=1:n
+        k0 = z(i);
+        eta = X(i,:)*beta_true(:,k0);
+        mu  = 1/(1+exp(-eta));
+        mu_alpha = mu^(1/alpha_true(k0));
+        lambda   = mu_alpha/(1-mu_alpha);
+        t = gammaincinv(rand(), alpha_true(k0), 'lower');
+        y(i) = exp(-t/lambda);
+    end
+    y = max(y, eps);
+
+    %% ====== EM Initialization ======
+    reg     = 1e-6;
+    k       = 1;
+    max_iter= 200; tol = 1e-6;
+    tau     = rand(n,K);
+    tau     = tau./sum(tau,2);
+    pi_k    = ones(1,K)/K;
+    beta_k  = randn(p,K);
+    alpha_k = 1.5*ones(1,K);
+    converged = false;
+
+    while k <= max_iter && ~converged
+        %% ====== Step 2: E-step ======
+        dens = zeros(n,K);
+        for j = 1:K
+            eta = X * beta_k(:,j);
+            mu  = 1./(1+exp(-eta));
+            mu_alpha = mu.^(1/alpha_k(j));
+            lambda   = mu_alpha./(1-mu_alpha);
+            logpdf = alpha_k(j)*log(lambda) - gammaln(alpha_k(j)) + ...
+                     (lambda-1).*log(y) + (alpha_k(j)-1).*log(-log(y));
+            dens(:,j) = pi_k(j) * exp(logpdf);
+        end
+        tau = dens ./ (sum(dens,2) + eps);
+
+        %% ====== Step 3: M-step (pi update) ======
+        Nk = sum(tau,1);
+        pi_new = Nk / n;
+
+        %% ====== Step 4: M-step (beta update) ======
+        beta_new = beta_k;
+        for j = 1:K
+            b_curr = beta_k(:,j);
+            a_curr = alpha_k(j);
+            for it = 1:5
+                eta = X * b_curr;
+                u   = 1./(1+exp(-eta));
+                u_alpha = u.^(1/a_curr);
+                one_mu  = 1 - u_alpha;
+                lny = log(y);
+                term1 = (1-u)./one_mu;
+                term2 = (u_alpha.*(1-u).*lny)./(a_curr*one_mu.^2);
+                score = sum(tau(:,j).*(term1+term2).*X,1)';
+                fisher = sum(tau(:,j).*((1-u).^2)./(a_curr*one_mu.^2).*(X.^2),1);
+                J = diag(fisher) + reg*eye(p);
+                b_curr = b_curr + J \ score;
+            end
+            beta_new(:,j) = b_curr;
+        end
+
+        %% ====== Step 5: M-step (alpha update) ======
+        alpha_new = alpha_k;
+        for j = 1:K
+            delta = log(alpha_k(j));
+            for it = 1:5
+                alpha = exp(delta);
+                eta = X * beta_new(:,j);
+                u   = 1./(1+exp(-eta));
+                u_alpha = u.^(1/alpha);
+                one_mu = 1 - u_alpha;
+                lny = log(y);
+                logu = log(u);
+                loglogy = log(-log(y));
+                d_ll_dalpha = -logu./(alpha^2 .* one_mu);
+                d_lambda = (u_alpha./one_mu) .* d_ll_dalpha;
+                term1 = log(u_alpha./one_mu);
+                term2 = d_ll_dalpha .* alpha;
+                term3 = d_lambda .* lny;
+                dlogpdf = term1 + term2 + term3 - psi(alpha) + loglogy;
+                score_a = alpha * sum(tau(:,j) .* dlogpdf);
+                trig = psi(1,alpha);
+                t1 = -(logu.*(2*alpha - logu - 2*alpha.*u_alpha)) ./ (alpha .* one_mu.^2);
+                t2 = alpha^2*trig;
+                t3 = alpha*psi(alpha);
+                t4 = -alpha*log(log(1./y));
+                t5 = -alpha*log(u_alpha./one_mu);
+                fisher_a = sum(tau(:,j).*(t1+t2+t3+t4+t5));
+                fisher_a = fisher_a + reg;
+                delta = delta + score_a / fisher_a;
+            end
+            alpha_new(j) = exp(delta);
+        end
+
+        %% ====== Step 6: Check convergence ======
+        diff_val = sum((pi_new - pi_k).^2) + sum((beta_new(:) - beta_k(:)).^2) + sum((alpha_new - alpha_k).^2);
+        if diff_val < tol
+            converged = true;
+        end
+
+        pi_k    = pi_new;
+        beta_k  = beta_new;
+        alpha_k = alpha_new;
+        k = k + 1;
+    end
+
+    %% ====== 儲存本次估計結果 ======
+    pi_store(rep, :)      = pi_k;
+    beta_store(rep, :, :) = beta_k;
+    alpha_store(rep, :)   = alpha_k;
+end
+
+%% ====== 統計分析 ======
+mean_pi    = mean(pi_store, 1);
+std_pi     = std(pi_store, 0, 1);
+bias_pi    = mean(pi_store - pi_true, 1);
+
+mean_beta  = squeeze(mean(beta_store, 1));
+std_beta   = squeeze(std(beta_store, 0, 1));
+bias_beta  = squeeze(mean(beta_store, 1) - beta_true);
+
+mean_alpha = mean(alpha_store, 1);
+std_alpha  = std(alpha_store, 0, 1);
+bias_alpha = mean(alpha_store - alpha_true, 1);
+
+disp('混合權重平均、標準差、偏誤:');
+disp([mean_pi; std_pi; bias_pi]);
+disp('beta平均、標準差、偏誤:');
+disp([mean_beta, std_beta, bias_beta]);
+disp('alpha平均、標準差、偏誤:');
+disp([mean_alpha; std_alpha; bias_alpha]);
+
+% ====== 回歸線繪圖 ======
+figure; hold on;
+colors = lines(K);
+x_grid = linspace(-3, 3, 200)';
+X_grid = [ones(size(x_grid)), x_grid];
+
+% 畫真實回歸線
+for j = 1:K
+    mu_true = 1 ./ (1 + exp(-X_grid * beta_true(:,j)));
+    plot(x_grid, mu_true, '--', 'LineWidth', 2, 'Color', colors(j,:), ...
+        'DisplayName', sprintf('Group %d (True)', j));
+end
+
+% 畫平均回歸線
+for j = 1:K
+    mu_mean = 1 ./ (1 + exp(-X_grid * mean_beta(:,j)));
+    plot(x_grid, mu_mean, '-', 'LineWidth', 2, 'Color', colors(j,:), ...
+        'DisplayName', sprintf('Group %d (Mean Est)', j));
+end
+
+xlabel('x'); ylabel('\mu(x)');
+title('True vs. Mean Estimated Regression Lines');
+legend('Location','best'); grid on;
+hold off;
