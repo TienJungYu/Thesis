@@ -1,0 +1,177 @@
+clc; clear; close all;
+%% ====== 模擬設定 ======
+n = 500; p = 2; K = 2; num_sim = 5;
+beta_true  = [1 -1; -1 2];     % 每個 column 是第 k 組的 beta
+alpha_true = [2, 4];
+pi_true    = [0.6, 0.4];
+
+beta_all  = NaN(num_sim, p, K);
+alpha_all = NaN(num_sim, K);
+pi_all    = NaN(num_sim, K);
+valid_idx = false(num_sim, 1);
+
+%% ====== 開始模擬 ======
+for s = 1:num_sim
+try
+% Step 0: 模擬資料
+x_vals = normrnd(0,1,n,1);
+X = [ones(n,1), x_vals];
+z = randsample(1:K, n, true, pi_true);
+y = zeros(n,1);
+for i=1:n
+k0 = z(i);
+eta = X(i,:)*beta_true(:,k0);
+mu  = 1/(1+exp(-eta));
+mu_alpha = mu^(1/alpha_true(k0));
+lambda   = mu_alpha/(1-mu_alpha);
+t = gammaincinv(rand(), alpha_true(k0), 'lower');
+y(i) = exp(-t/lambda);
+end
+y = max(y, eps);
+
+    % ====== EM Initialization ======
+    reg     = 1e-6;
+    k       = 1; max_iter= 200; tol = 1e-6;
+    tau     = rand(n,K); tau = tau./sum(tau,2);
+    pi_k    = ones(1,K)/K;
+    beta_k  = randn(p,K);
+    alpha_k = 1.5*ones(1,K);
+    converged = false;
+
+    while k <= max_iter && ~converged
+        % E-step
+        dens = zeros(n,K);
+        for j = 1:K
+            eta = X * beta_k(:,j);
+            mu  = 1./(1+exp(-eta));
+            mu_alpha = mu.^(1/alpha_k(j));
+            lambda   = mu_alpha./(1-mu_alpha);
+            logpdf = alpha_k(j)*log(lambda) - gammaln(alpha_k(j)) + ...
+                     (lambda-1).*log(y) + (alpha_k(j)-1).*log(-log(y));
+            dens(:,j) = pi_k(j) * exp(logpdf);
+        end
+        tau = dens ./ sum(dens,2);
+
+        % M-step: pi
+        Nk = sum(tau,1); pi_new = Nk / n;
+
+        % M-step: beta
+        beta_new = beta_k;
+        for j = 1:K
+            b_curr = beta_k(:,j); a_curr = alpha_k(j);
+            for it = 1:5
+                eta = X * b_curr;
+                u   = 1./(1+exp(-eta)); u = max(min(u,1-eps), eps);
+                u_alpha = u.^(1/a_curr);
+                one_mu  = max(1 - u_alpha, eps);
+                lambda  = u_alpha./(one_mu + eps);
+                lny = log(y + eps);
+
+                term1 = (1-u)./(one_mu + eps);
+                term2 = (u_alpha.*(1-u).*lny)./(a_curr*(one_mu + eps).^2);
+                score = sum(tau(:,j).*(term1+term2).*X,1)';
+
+                fisher = sum(tau(:,j).*((1-u).^2)./(a_curr*(one_mu + eps).^2).*(X.^2),1);
+                fisher = max(fisher, eps);
+                J = diag(fisher) + reg*eye(p);
+
+                if rcond(J) < eps
+                    J = J + reg*eye(p);
+                end
+                b_curr = b_curr + (J \\ score);
+
+                update = b_curr - beta_k(:,j);
+                if norm(update) > 1.0
+                    update = update * (1.0 / norm(update));
+                    b_curr = beta_k(:,j) + update;
+                end
+            end
+            beta_new(:,j) = b_curr;
+        end
+
+        % M-step: alpha
+        alpha_new = alpha_k;
+        for j = 1:K
+            delta = log(alpha_k(j));
+            for it = 1:5
+                alpha = exp(delta);
+                eta = X * beta_new(:,j);
+                u   = 1./(1+exp(-eta));
+                u_alpha = u.^(1/alpha);
+                one_mu = 1 - u_alpha;
+                lny = log(y); logu = log(u); loglogy = log(-log(y));
+
+                d_ll_dalpha = -logu./(alpha^2 .* one_mu);
+                d_lambda = (u_alpha./one_mu) .* d_ll_dalpha;
+                term1 = log(u_alpha./one_mu);
+                term2 = d_ll_dalpha .* alpha;
+                term3 = d_lambda .* lny;
+                dlogpdf = term1 + term2 + term3 - psi(alpha) + loglogy;
+                score_a = alpha * sum(tau(:,j) .* dlogpdf);
+
+                trig = psi(1,alpha);
+                t1 = -(logu.*(2*alpha - logu - 2*alpha.*u_alpha)) ./ (alpha .* one_mu.^2);
+                t2 = alpha^2*trig;
+                t3 = alpha*psi(alpha);
+                t4 = -alpha*log(log(1./y));
+                t5 = -alpha*log(u_alpha./one_mu);
+                fisher_a = sum(tau(:,j).*(t1+t2+t3+t4+t5));
+                fisher_a = fisher_a + reg;
+
+                delta = delta + score_a / fisher_a;
+            end
+            alpha_new(j) = exp(delta);
+        end
+
+        % 收斂檢查
+        diff_val = sum((pi_new - pi_k).^2) + sum((beta_new(:) - beta_k(:)).^2) + sum((alpha_new - alpha_k).^2);
+        if diff_val < tol
+            converged = true;
+        end
+        pi_k = pi_new; beta_k = beta_new; alpha_k = alpha_new;
+        k = k + 1;
+    end
+
+    % === 若成功收斂，則儲存結果 ===
+    if converged && all(isfinite(pi_k)) && all(isfinite(alpha_k)) && all(isfinite(beta_k(:)))
+        % ===== 排序以對齊參數順序 =====
+        [~, sort_idx] = sort(beta_k(1,:));
+        pi_k    = pi_k(sort_idx);
+        beta_k  = beta_k(:,sort_idx);
+        alpha_k = alpha_k(sort_idx);
+
+        % 儲存結果
+        pi_all(s,:)      = pi_k;
+        beta_all(s,:,:)  = beta_k;
+        alpha_all(s,:)   = alpha_k;
+        valid_idx(s) = true;
+    end
+catch
+    % 忽略錯誤，繼續模擬下一次
+    continue;
+end
+
+end
+
+%% ===== 統計結果 =====
+valid_runs = sum(valid_idx);
+fprintf('有效模擬次數：%d / %d\n', valid_runs, num_sim);
+
+pi_mean = mean(pi_all(valid_idx,:),1);
+pi_std  = std(pi_all(valid_idx,:),[],1);
+
+beta_mean = squeeze(mean(beta_all(valid_idx,:,:),1));
+beta_std  = squeeze(std(beta_all(valid_idx,:,:),[],1));
+
+alpha_mean = mean(alpha_all(valid_idx,:),1);
+alpha_std  = std(alpha_all(valid_idx,:),[],1);
+
+fprintf('\n== Mixing weights pi ==\n'); disp([pi_mean; pi_std]);
+fprintf('\n== Regression coefficients beta ==\n');
+for k = 1:K
+fprintf('Group %d mean: ', k); disp(beta_mean(:,k)');
+fprintf('Group %d std:  ', k); disp(beta_std(:,k)');
+end
+
+fprintf('\n== Alpha parameters ==\n');
+disp([alpha_mean; alpha_std]);
