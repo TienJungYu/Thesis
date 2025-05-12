@@ -78,7 +78,7 @@ y = max(y, eps);
                 if rcond(J) < eps
                     J = J + reg*eye(p);
                 end
-                b_curr = b_curr + (J \\ score);
+                b_curr = b_curr + (J \ score);
 
                 update = b_curr - beta_k(:,j);
                 if norm(update) > 1.0
