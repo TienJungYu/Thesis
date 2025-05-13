@@ -1,6 +1,6 @@
 clc; clear; close all;
 %% ====== 模擬設定 ======
-n = 500; p = 2; K = 2; num_sim = 500;
+n = 500; p = 2; K = 2; num_sim = 200;
 beta_true  = [1 -1; -1 2];     % 每個 column 是第 k 組的 beta
 alpha_true = [2, 4];
 pi_true    = [0.6, 0.4];
@@ -11,9 +11,13 @@ pi_all    = NaN(num_sim, K);
 valid_idx = false(num_sim, 1);
 sort_idx_all = NaN(num_sim, K);  % 新增：儲存每次模擬的排序順序
 
+
+total_timer = tic;     % 開始總計時器
+time_all = NaN(num_sim,1);  % 儲存每次模擬耗時
 %% ====== 開始模擬 ======
 for s = 1:num_sim
 try
+sim_timer = tic;% 單次模擬計時開始
 % Step 0: 模擬資料
 x_vals = normrnd(0,1,n,1);
 X = [ones(n,1), x_vals];
@@ -147,11 +151,14 @@ y = max(y, eps);
         alpha_all(s,:)   = alpha_k;
         valid_idx(s) = true;
     end
+    time_all(s) = toc(sim_timer);  % 儲存單次模擬耗時
 catch
     continue;
 end
 end
-
+total_time = toc(total_timer);  % 總模擬時間
+fprintf('\n模擬總耗時：%.2f 秒\n', total_time);
+fprintf('平均每次模擬耗時：%.2f 秒（只含成功模擬）\n', mean(time_all(valid_idx)));
 %% ===== 統計結果 =====
 valid_runs = sum(valid_idx);
 fprintf('有效模擬次數：%d / %d\n', valid_runs, num_sim);
@@ -203,6 +210,12 @@ fprintf('\n== Regression coefficients beta ==\n');
 for k = 1:K
     fprintf('Group %d bias: ', k); disp(beta_bias(:,k)');
     fprintf('Group %d RMSE:  ',  k); disp(beta_rmse(:,k)');
+end
+
+fprintf('\n== Alpha parameters ==\n');
+fprintf('Bias:\n'); disp(alpha_bias);
+fprintf('RMSE:\n');  disp(alpha_rmse);
+
 end
 
 fprintf('\n== Alpha parameters ==\n');
