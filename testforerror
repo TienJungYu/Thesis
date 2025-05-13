@@ -1,6 +1,6 @@
 clc; clear; close all;
 %% ====== 模擬設定 ======
-n = 500; p = 2; K = 2; num_sim = 5;
+n = 500; p = 2; K = 2; num_sim = 500;
 beta_true  = [1 -1; -1 2];     % 每個 column 是第 k 組的 beta
 alpha_true = [2, 4];
 pi_true    = [0.6, 0.4];
@@ -157,6 +157,12 @@ end
 valid_runs = sum(valid_idx);
 fprintf('有效模擬次數：%d / %d\n', valid_runs, num_sim);
 
+% ===== 依據最後一次排序對真值排序 =====
+beta_true_sorted  = beta_true(:, sort_idx);
+alpha_true_sorted = alpha_true(sort_idx);
+pi_true_sorted    = pi_true(sort_idx);
+
+% ===== 平均與標準差 =====
 pi_mean = mean(pi_all(valid_idx,:),1);
 pi_std  = std(pi_all(valid_idx,:),[],1);
 
@@ -166,12 +172,38 @@ beta_std  = squeeze(std(beta_all(valid_idx,:,:),[],1));
 alpha_mean = mean(alpha_all(valid_idx,:),1);
 alpha_std  = std(alpha_all(valid_idx,:),[],1);
 
-fprintf('\n== Mixing weights pi ==\n'); disp([pi_mean; pi_std]);
+fprintf('\n== Mixing weights pi ==\n'); 
+disp([pi_mean; pi_std]);
+
 fprintf('\n== Regression coefficients beta ==\n');
 for k = 1:K
-fprintf('Group %d mean: ', k); disp(beta_mean(:,k)');
-fprintf('Group %d std:  ', k); disp(beta_std(:,k)');
+    fprintf('Group %d mean: ', k); disp(beta_mean(:,k)');
+    fprintf('Group %d std:  ', k);  disp(beta_std(:,k)');
 end
 
 fprintf('\n== Alpha parameters ==\n');
 disp([alpha_mean; alpha_std]);
+
+% ===== Bias 與 MSE =====
+pi_bias = mean(pi_all(valid_idx,:) - pi_true_sorted, 1);
+pi_mse  = mean((pi_all(valid_idx,:) - pi_true_sorted).^2, 1);
+
+beta_bias = squeeze(mean(beta_all(valid_idx,:,:) - reshape(beta_true_sorted, 1, p, K), 1));
+beta_mse  = squeeze(mean((beta_all(valid_idx,:,:) - reshape(beta_true_sorted, 1, p, K)).^2, 1));
+
+alpha_bias = mean(alpha_all(valid_idx,:) - alpha_true_sorted, 1);
+alpha_mse  = mean((alpha_all(valid_idx,:) - alpha_true_sorted).^2, 1);
+
+fprintf('\n== Mixing weights pi ==\n');
+fprintf('Bias:\n'); disp(pi_bias);
+fprintf('MSE:\n');  disp(pi_mse);
+
+fprintf('\n== Regression coefficients beta ==\n');
+for k = 1:K
+    fprintf('Group %d bias: ', k); disp(beta_bias(:,k)');
+    fprintf('Group %d MSE:  ',  k); disp(beta_mse(:,k)');
+end
+
+fprintf('\n== Alpha parameters ==\n');
+fprintf('Bias:\n'); disp(alpha_bias);
+fprintf('MSE:\n');  disp(alpha_mse);
