@@ -9,6 +9,7 @@ beta_all  = NaN(num_sim, p, K);
 alpha_all = NaN(num_sim, K);
 pi_all    = NaN(num_sim, K);
 valid_idx = false(num_sim, 1);
+sort_idx_all = NaN(num_sim, K);  % 新增：儲存每次模擬的排序順序
 
 %% ====== 開始模擬 ======
 for s = 1:num_sim
@@ -134,30 +135,30 @@ y = max(y, eps);
 
     % === 若成功收斂，則儲存結果 ===
     if converged && all(isfinite(pi_k)) && all(isfinite(alpha_k)) && all(isfinite(beta_k(:)))
-        % ===== 排序以對齊參數順序 =====
         [~, sort_idx] = sort(beta_k(1,:));
+        sort_idx_all(s,:) = sort_idx;
+
         pi_k    = pi_k(sort_idx);
         beta_k  = beta_k(:,sort_idx);
         alpha_k = alpha_k(sort_idx);
 
-        % 儲存結果
         pi_all(s,:)      = pi_k;
         beta_all(s,:,:)  = beta_k;
         alpha_all(s,:)   = alpha_k;
         valid_idx(s) = true;
     end
 catch
-    % 忽略錯誤，繼續模擬下一次
     continue;
 end
-
 end
 
 %% ===== 統計結果 =====
 valid_runs = sum(valid_idx);
 fprintf('有效模擬次數：%d / %d\n', valid_runs, num_sim);
 
-% ===== 依據最後一次排序對真值排序 =====
+% 依據最後一次有效模擬的排序作為真值對齊參考
+last_valid = find(valid_idx, 1, 'last');
+sort_idx = sort_idx_all(last_valid,:);
 beta_true_sorted  = beta_true(:, sort_idx);
 alpha_true_sorted = alpha_true(sort_idx);
 pi_true_sorted    = pi_true(sort_idx);
@@ -184,26 +185,26 @@ end
 fprintf('\n== Alpha parameters ==\n');
 disp([alpha_mean; alpha_std]);
 
-% ===== Bias 與 MSE =====
+% ===== Bias 與 RMSE =====
 pi_bias = mean(pi_all(valid_idx,:) - pi_true_sorted, 1);
-pi_mse  = mean((pi_all(valid_idx,:) - pi_true_sorted).^2, 1);
+pi_rmse = sqrt(mean((pi_all(valid_idx,:) - pi_true_sorted).^2, 1));
 
 beta_bias = squeeze(mean(beta_all(valid_idx,:,:) - reshape(beta_true_sorted, 1, p, K), 1));
-beta_mse  = squeeze(mean((beta_all(valid_idx,:,:) - reshape(beta_true_sorted, 1, p, K)).^2, 1));
+beta_rmse = squeeze(sqrt(mean((beta_all(valid_idx,:,:) - reshape(beta_true_sorted, 1, p, K)).^2, 1)));
 
 alpha_bias = mean(alpha_all(valid_idx,:) - alpha_true_sorted, 1);
-alpha_mse  = mean((alpha_all(valid_idx,:) - alpha_true_sorted).^2, 1);
+alpha_rmse = sqrt(mean((alpha_all(valid_idx,:) - alpha_true_sorted).^2, 1));
 
 fprintf('\n== Mixing weights pi ==\n');
 fprintf('Bias:\n'); disp(pi_bias);
-fprintf('MSE:\n');  disp(pi_mse);
+fprintf('RMSE:\n');  disp(pi_rmse);
 
 fprintf('\n== Regression coefficients beta ==\n');
 for k = 1:K
     fprintf('Group %d bias: ', k); disp(beta_bias(:,k)');
-    fprintf('Group %d MSE:  ',  k); disp(beta_mse(:,k)');
+    fprintf('Group %d RMSE:  ',  k); disp(beta_rmse(:,k)');
 end
 
 fprintf('\n== Alpha parameters ==\n');
 fprintf('Bias:\n'); disp(alpha_bias);
-fprintf('MSE:\n');  disp(alpha_mse);
+fprintf('RMSE:\n');  disp(alpha_rmse);
