@@ -1,4 +1,3 @@
-
 % ====== Unit Gamma Mixture Regression EM Algorithm ======
 clc; clear; close all;
 
@@ -61,16 +60,42 @@ while k <= max_iter && ~converged
         for it = 1:5
             eta = X * b_curr;
             u   = 1./(1+exp(-eta));
+            u   = max(min(u, 1-eps), eps);
+            
             u_alpha = u.^(1/a_curr);
             one_mu  = 1 - u_alpha;
-            lambda  = u_alpha./one_mu;
-            lny = log(y);
-            term1 = (1-u)./one_mu;
-            term2 = (u_alpha.*(1-u).*lny)./(a_curr*one_mu.^2);
+            one_mu  = max(one_mu, eps);
+            
+            lambda  = u_alpha./(one_mu + eps);
+            lny = log(y + eps);
+            
+            term1 = (1-u)./(one_mu + eps);
+            term2 = (u_alpha.*(1-u).*lny)./(a_curr*(one_mu + eps).^2);
             score = sum(tau(:,j).*(term1+term2).*X,1)';
-            fisher = sum(tau(:,j).*((1-u).^2)./(a_curr*one_mu.^2).*(X.^2),1);
-            J = diag(fisher) + reg*eye(p);    % Regularize fisher matrix
-            b_curr = b_curr + J \ score;
+            
+            fisher = sum(tau(:,j).*((1-u).^2)./(a_curr*(one_mu + eps).^2).*(X.^2),1);
+            fisher = max(fisher, eps);
+            
+            J = diag(fisher) + reg*eye(p);
+            
+            if rcond(J) < eps
+                warning('Fisher 矩陣接近奇異，增加正則化');
+                J = J + reg*eye(p);
+            end
+            
+            try
+                b_curr = b_curr + (J \ score);
+            catch
+                warning('使用備用方法求解');
+                b_curr = b_curr + pinv(J) * score;
+            end
+            
+            max_update = 1.0;
+            update = b_curr - beta_k(:,j);
+            if norm(update) > max_update
+                update = update * (max_update / norm(update));
+                b_curr = beta_k(:,j) + update;
+            end
         end
         beta_new(:,j) = b_curr;
     end
@@ -129,30 +154,31 @@ disp('Estimated mixing weights pi_k:'); disp(pi_k);
 disp('Estimated regression coefs beta_k:'); disp(beta_k);
 disp('Estimated alphas alpha_k:'); disp(alpha_k);
 
-%% ====== Visualization (True groups) ======
+%% ====== Visualization: Combined True Groups + Estimated Regression Lines ======
 figure; hold on;
-colors = lines(K);
-for j=1:K
+colors = [0.30 0.75 0.93; 0.94 0.45 0.40; 0.50 0.80 0.50]; % 柔和對比色，最多3群
+markersize = 18;
+
+% 畫出真實分群散點圖（依照 z 真實群組）
+for j = 1:K
     idx = (z == j);
-    scatter(X(idx,2), y(idx), 20, 'filled', 'MarkerFaceColor', colors(j,:), ...
+    scatter(X(idx,2), y(idx), markersize, 'MarkerFaceColor', colors(j,:), ...
+            'MarkerEdgeColor', 'k', 'MarkerFaceAlpha', 0.6, ...
             'DisplayName', sprintf('Group %d (True)', j));
 end
-xlabel('x'); ylabel('y'); title('Simulated Data (True Groups)');
-legend('Location','best'); grid on;
 
-%% ====== Visualization (Estimated Regression Lines) ======
-% Plot estimated mean response function mu(x) = logistic(X*beta)
-figure; hold on;
-colors = lines(K);
-x_grid = linspace(min(X(:,2)), max(X(:,2)), 200)';
+% 畫出每一群估計的 μ(x) 回歸曲線（實線，較粗）
+x_grid = linspace(min(X(:,2)), max(X(:,2)), 300)';
 X_grid = [ones(size(x_grid)), x_grid];
 for j = 1:K
     mu_pred = 1 ./ (1 + exp(-X_grid * beta_k(:,j)));
-    plot(x_grid, mu_pred, 'LineWidth', 2, 'Color', colors(j,:), ...
-         'DisplayName', sprintf('Group %d (Estimated)', j));
+    plot(x_grid, mu_pred, '-', 'LineWidth', 3, 'Color', colors(j,:), ...
+         'DisplayName', sprintf('Group %d μ(x)', j));
 end
-xlabel('x'); ylabel('Estimated \mu(x)');
-title('Estimated Regression Lines by Group');
-legend('Location','best'); grid on;
 
-
+xlabel('x', 'FontSize', 12); 
+ylabel('y / \mu(x)', 'FontSize', 12);
+title('True Groups with Estimated Regression Lines', 'FontSize', 14);
+legend('Location','best');
+grid on;
+box on;
