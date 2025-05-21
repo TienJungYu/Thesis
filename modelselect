@@ -2,42 +2,53 @@ clc; clear; close all;
 
 %% ====== 參數設定 ======
 scenario_id = 1; 
-% 定義 8 種情境
+% 情境 1：群組差異明顯（β 與 α 都不同）
 scenarios(1).beta_true  = [1 -1; -1 2];    
 scenarios(1).alpha_true = [2, 4];  
 scenarios(1).pi_true    = [0.6, 0.4];
+% 說明：β、α 均有明顯差異，群組比例適中，利於模型辨識 → 屬於理想情境
 
-scenarios(2).beta_true  = [1 -1; 1 -1];    
+% 情境 2:群組比例一樣
+scenarios(2).beta_true  = [1 -1; -1 1];    
 scenarios(2).alpha_true = [3, 3];  
 scenarios(2).pi_true    = [0.5, 0.5];
+% 說明：兩群參數完全相同，實為單一群，測試模型是否會錯誤地強行分群（過擬合風險）
 
+% 情境 3：β 與 α 均有差異，且群組比例懸殊
 scenarios(3).beta_true  = [0.5 1.5; -0.2 0.6]; 
 scenarios(3).alpha_true = [4, 2];  
 scenarios(3).pi_true    = [0.8, 0.2];
+% 說明：主要群穩定、次要群不穩定且樣本少，測試極端比例下少數群是否可辨
 
+% 情境 4：β 有差異但 α 相同
 scenarios(4).beta_true  = [0.5 1.5; -0.2 0.6]; 
 scenarios(4).alpha_true = [3, 3];  
 scenarios(4).pi_true    = [0.7, 0.3];
+% 說明：只能依賴 β 分群，α 不協助辨識，測試模型是否能僅靠迴歸效果分辨群組
 
-% 新增：偏態高（右尾重）
+% 情境 5：偏態高（右尾重）
 scenarios(5).beta_true  = [1 0; 0.5 1]; 
 scenarios(5).alpha_true = [0.5, 0.8];  
 scenarios(5).pi_true    = [0.5, 0.5];
+% 說明：α 值小表示偏態明顯，產生右尾重的資料，測試模型對偏態資料的適應能力
 
-% 新增：變異懸殊（穩定 vs 不穩定）
+% 情境 6：變異懸殊（穩定 vs 不穩定）
 scenarios(6).beta_true  = [1 0; 1 0]; 
 scenarios(6).alpha_true = [10, 0.5];  
 scenarios(6).pi_true    = [0.5, 0.5];
+% 說明：兩群 β 相同但 α 差異極大，一群穩定、一群極度不穩定，測試分群是否可行
 
-% 新增：極端比例（幾乎單群）
+% 情境 7：極端比例（幾乎單群）
 scenarios(7).beta_true  = [1 1; -1 -1]; 
 scenarios(7).alpha_true = [3, 3];  
 scenarios(7).pi_true    = [0.95, 0.05];
+% 說明：極端比例導致次要群樣本極少，測試模型對極小樣本群是否仍能識別
 
-% 新增：群分離困難（β 接近, α 相同）
+% 情境 8：群分離困難（β 非常接近，α 完全相同）
 scenarios(8).beta_true  = [1 1; 1.05 1.05]; 
 scenarios(8).alpha_true = [3, 3];  
 scenarios(8).pi_true    = [0.5, 0.5];
+% 說明：β 僅有極小差異，α 完全相同，幾乎難以分辨，測試模型在邊界情況下的辨識能力
 
 
 beta_true  = scenarios(scenario_id).beta_true;
@@ -49,7 +60,7 @@ pi_true    = scenarios(scenario_id).pi_true;
 n = 500;       % 樣本數
 p = 2;         % 預測變量數 (含截距項)
 K = 2;         % 組別數量
-num_sim = 100; % 模擬次數
+num_sim = 200; % 模擬次數
 
 % 儲存結果的變數
 beta_all  = NaN(num_sim, p, K);
