@@ -5,10 +5,10 @@ rng(42); % 設定隨機種子以便重現結果
 n = 500;       % 樣本數
 p = 2;         % 預測變量數 (含截距項)
 K = 2;         % 組別數量
-num_sim = 50; % 模擬次數
+num_sim = 20; % 模擬次數
 
 % 真實參數值
-beta_true  = [1 -1;   % 每列是第k組的beta (第一行是截距)
+beta_true  = [1 2;   % 每列是第k組的beta (第一行是截距)
               -1 2];  
 alpha_true = [2, 4];  % 形狀參數
 pi_true    = [0.6, 0.4]; % 混合比例
@@ -315,4 +315,34 @@ end
 fprintf('\n形狀參數 alpha:\n');
 fprintf('  偏差: [%.4f, %.4f]\n', alpha_bias(1), alpha_bias(2));
 fprintf('  RMSE: [%.4f, %.4f]\n', alpha_rmse(1), alpha_rmse(2));
+%% ====== Visualization: Combined True Groups + Estimated Regression Lines ======
+figure; hold on;
+colors = [0.30 0.75 0.93; 0.94 0.45 0.40; 0.50 0.80 0.50]; % 柔和對比色，最多3群
+markersize = 18;
+
+% 畫出真實分群散點圖（依照 z 真實群組）
+for j = 1:K
+    idx = (z == j);
+    scatter(X(idx,2), y(idx), markersize, 'MarkerFaceColor', colors(j,:), ...
+            'MarkerEdgeColor', 'k', 'MarkerFaceAlpha', 0.6, ...
+            'DisplayName', sprintf('Group %d (True)', j));
+end
+
+% 畫出每一群估計的 μ(x) 回歸曲線（實線，較粗）
+x_grid = linspace(min(X(:,2)), max(X(:,2)), 300)';
+X_grid = [ones(size(x_grid)), x_grid];
+for j = 1:K
+    mu_pred = 1 ./ (1 + exp(-X_grid * beta_k(:,j)));
+    plot(x_grid, mu_pred, '-', 'LineWidth', 3, 'Color', colors(j,:), ...
+         'DisplayName', sprintf('Group %d μ(x)', j));
+end
+
+xlabel('x', 'FontSize', 12); 
+ylabel('y / \mu(x)', 'FontSize', 12);
+title('True Groups with Estimated Regression Lines', 'FontSize', 14);
+legend('Location','best');
+grid on;
+box on;
+
+
 
