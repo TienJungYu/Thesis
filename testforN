@@ -1,0 +1,166 @@
+clear; clc;
+
+% 設定樣本數與模擬次數
+sample_sizes = [100, 200, 300];
+nsim = 500;
+K = 2;
+
+% 真實參數
+beta_true = [1; -1];
+alpha_true = [3; 5];
+lambda_true = [2; 6];
+pi_true = [0.6, 0.4];
+
+% 儲存結果
+results = struct();
+
+for s = 1:length(sample_sizes)
+    n = sample_sizes(s);
+    disp(['模擬樣本數 n = ', num2str(n)]);
+
+    % 儲存每次模擬的偏誤與 MSE
+    bias_beta = zeros(nsim, 2);
+    bias_alpha = zeros(nsim, 2);
+    bias_lambda = zeros(nsim, 2);
+    mse_beta = zeros(nsim, 2);
+    mse_alpha = zeros(nsim, 2);
+    mse_lambda = zeros(nsim, 2);
+
+    valid_sim = 0;
+
+    for sim = 1:nsim
+        % ----- 資料生成 -----
+        X = [ones(n,1), rand(n,1)]; % 截距 + 一個自變數
+        z = rand(n,1);
+        y = zeros(n,1);
+        true_label = zeros(n,1);
+        for i = 1:n
+            if z(i) < pi_true(1)
+                true_label(i) = 1;
+                mu = 1 ./ (1 + exp(-X(i,:) * beta_true));
+                y(i) = random('gam', alpha_true(1), 1/lambda_true(1));
+                y(i) = y(i) / (y(i) + random('gam', alpha_true(1)*(1/mu - 1), 1/lambda_true(1)));
+            else
+                true_label(i) = 2;
+                mu = 1 ./ (1 + exp(-X(i,:) * -beta_true));
+                y(i) = random('gam', alpha_true(2), 1/lambda_true(2));
+                y(i) = y(i) / (y(i) + random('gam', alpha_true(2)*(1/mu - 1), 1/lambda_true(2)));
+            end
+        end
+
+        % ----- EM 初始化 -----
+        pi_k = ones(1,K)/K;
+        beta_k = randn(2,K);
+        alpha_k = ones(1,K)*2;
+        lambda_k = ones(1,K)*2;
+        max_iter = 100;
+        tol = 1e-4;
+        ll_old = -inf;
+
+        for iter = 1:max_iter
+            % E-step
+            tau = zeros(n,K);
+            for k = 1:K
+                mu = 1 ./ (1 + exp(-X * beta_k(:,k)));
+                a = alpha_k(k);
+                l = lambda_k(k);
+                b = a * (1./mu - 1);
+                log_pdf = log(pi_k(k)) + ...
+                    (a - 1).*log(y) + (b - 1).*log(1 - y) - ...
+                    log(beta(a,b)) + a*log(l) + b*log(l) - ...
+                    (a + b)*log(l);
+                tau(:,k) = exp(log_pdf);
+            end
+            tau = tau ./ sum(tau,2);
+
+            % M-step
+            Nk = sum(tau);
+            pi_k = Nk / n;
+
+            for k = 1:K
+                Wk = diag(tau(:,k));
+                mu = 1 ./ (1 + exp(-X * beta_k(:,k)));
+                Rk = log(lambda_k(k)) - 1 + log(y) ./ (alpha_k(k) * lambda_k(k));
+                try
+                    beta_k(:,k) = (X' * Wk * X) \ (X' * Wk * Rk);
+                catch
+                    break; % 奇異矩陣，跳過這次模擬
+                end
+
+                % 更新 alpha, lambda (牛頓法簡化版)
+                mu = 1 ./ (1 + exp(-X * beta_k(:,k)));
+                a = alpha_k(k);
+                l = lambda_k(k);
+                for newton_iter = 1:10
+                    b = a * (1./mu - 1);
+                    digamma_ab = psi(a + b);
+                    grad = sum(tau(:,k) .* (log(y) - log(1 - y) + log(mu) - log(1 - mu) ...
+                        - psi(a) + digamma_ab));
+                    hess = sum(tau(:,k) .* ((1./mu - 1).^2 .* psi(1, a + b) - psi(1, a)));
+                    a = a - grad / hess;
+                    a = max(a, 0.01);
+                end
+                alpha_k(k) = a;
+                lambda_k(k) = l;
+            end
+
+            % Log-likelihood
+            ll = sum(log(sum(tau,2)));
+            if abs(ll - ll_old) < tol, break; end
+            ll_old = ll;
+        end
+
+        % 檢查有效性（避免 NaN 或發散）
+        if all(~isnan(beta_k(:))) && all(~isnan(alpha_k)) && all(~isnan(lambda_k))
+            valid_sim = valid_sim + 1;
+
+            % 預設 label 可能不同，排序對齊
+            est_params = [beta_k; alpha_k; lambda_k];
+            true_params = [beta_true, -beta_true; alpha_true; lambda_true];
+            perm = perms(1:K);
+            best_order = 1:K;
+            best_error = inf;
+            for p = 1:size(perm,1)
+                err = sum(sum((est_params - true_params(:,perm(p,:))).^2));
+                if err < best_error
+                    best_error = err;
+                    best_order = perm(p,:);
+                end
+            end
+
+            % 計算偏誤與 MSE
+            beta_k = beta_k(:,best_order);
+            alpha_k = alpha_k(best_order);
+            lambda_k = lambda_k(best_order);
+
+            bias_beta(valid_sim,:) = mean(beta_k - [beta_true, -beta_true], 1);
+            bias_alpha(valid_sim,:) = alpha_k - alpha_true;
+            bias_lambda(valid_sim,:) = lambda_k - lambda_true;
+
+            mse_beta(valid_sim,:) = mean((beta_k - [beta_true, -beta_true]).^2, 1);
+            mse_alpha(valid_sim,:) = (alpha_k - alpha_true).^2;
+            mse_lambda(valid_sim,:) = (lambda_k - lambda_true).^2;
+        end
+    end
+
+    % 儲存每個樣本數 n 的結果
+    results(s).n = n;
+    results(s).valid_sim = valid_sim;
+    results(s).bias_beta = mean(bias_beta(1:valid_sim,:));
+    results(s).bias_alpha = mean(bias_alpha(1:valid_sim,:));
+    results(s).bias_lambda = mean(bias_lambda(1:valid_sim,:));
+    results(s).mse_beta = mean(mse_beta(1:valid_sim,:));
+    results(s).mse_alpha = mean(mse_alpha(1:valid_sim,:));
+    results(s).mse_lambda = mean(mse_lambda(1:valid_sim,:));
+end
+
+% 顯示結果
+for s = 1:length(sample_sizes)
+    fprintf('\n樣本數 n = %d，有效模擬次數 = %d\n', results(s).n, results(s).valid_sim);
+    fprintf('Bias beta:    %.4f  %.4f\n', results(s).bias_beta);
+    fprintf('Bias alpha:   %.4f  %.4f\n', results(s).bias_alpha);
+    fprintf('Bias lambda:  %.4f  %.4f\n', results(s).bias_lambda);
+    fprintf('MSE  beta:    %.4f  %.4f\n', results(s).mse_beta);
+    fprintf('MSE  alpha:   %.4f  %.4f\n', results(s).mse_alpha);
+    fprintf('MSE  lambda:  %.4f  %.4f\n', results(s).mse_lambda);
+end
