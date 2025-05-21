@@ -239,6 +239,7 @@ total_time = toc(total_timer);
 fprintf('\n模擬總耗時：%.2f 秒\n', total_time);
 fprintf('平均每次模擬耗時：%.2f 秒\n', mean(time_all(valid_idx)));
 fprintf('有效模擬次數：%d / %d\n', sum(valid_idx), num_sim);
+fprintf('模擬 %d 完成，log-likelihood = %.6f\n', s, loglik);
 
 %% ===== 統計結果 =====
 valid_runs = sum(valid_idx);
