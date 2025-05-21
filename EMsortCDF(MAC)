@@ -1,0 +1,315 @@
+clc; clear; close all;
+
+%% ====== 模擬設定 ======
+n = 500;       % 樣本數
+p = 2;         % 預測變量數 (含截距項)
+K = 2;         % 組別數量
+num_sim = 200; % 模擬次數
+
+% 真實參數值
+beta_true  = [1 -1;   % 每列是第k組的beta (第一行是截距)
+              -1 2];  
+alpha_true = [2, 4];  % 形狀參數
+pi_true    = [0.6, 0.4]; % 混合比例
+
+% 儲存結果的變數
+beta_all  = NaN(num_sim, p, K);
+alpha_all = NaN(num_sim, K);
+pi_all    = NaN(num_sim, K);
+valid_idx = false(num_sim, 1);
+loglik_all = NaN(num_sim, 1); % 儲存對數似然值
+
+total_timer = tic;     % 開始總計時器
+time_all = NaN(num_sim,1);  % 儲存每次模擬耗時
+
+%% ====== 開始模擬 ======
+for s = 1:num_sim
+    try
+        sim_timer = tic; % 單次模擬計時開始
+        
+        % Step 0: 模擬資料
+        x_vals = normrnd(0, 1, n, 1);
+        X = [ones(n,1), x_vals];
+        z = randsample(1:K, n, true, pi_true);
+        y = zeros(n,1);
+        
+        for i=1:n
+            k0 = z(i);
+            eta = X(i,:) * beta_true(:,k0);
+            mu = 1/(1+exp(-eta));
+            mu_alpha = mu^(1/alpha_true(k0));
+            lambda = mu_alpha/(1-mu_alpha);
+            t = gammaincinv(rand(), alpha_true(k0), 'lower');
+            y(i) = exp(-t/lambda);
+        end
+        y = max(y, eps);
+        
+        % ====== EM Initialization (隨機初始化版本) ======
+        % 隨機初始化tau
+        tau = rand(n,K); 
+        tau = tau ./ sum(tau,2);
+        
+        % 初始化參數
+        pi_k = mean(tau) + 1e-6; % 避免零概率
+        pi_k = pi_k / sum(pi_k);
+        
+        beta_k = randn(p,K); % 隨機初始化beta
+        alpha_k = 1 + 3*rand(1,K); % 隨機初始化alpha在[1,4]範圍內
+        
+        % EM參數
+        reg = 1e-6;
+        max_iter = 300;
+        tol = 1e-6;
+        converged = false;
+        prev_loglik = -Inf;
+        loglik_trace = zeros(max_iter,1);
+        
+        % ====== EM算法主循環 ======
+        for iter = 1:max_iter
+            % --- E-step ---
+            dens = zeros(n,K);
+            for j = 1:K
+                eta = X * beta_k(:,j);
+                mu = 1./(1+exp(-eta));
+                mu_alpha = mu.^(1/alpha_k(j));
+                lambda = mu_alpha./(1-mu_alpha);
+                
+                logpdf = alpha_k(j)*log(lambda) - gammaln(alpha_k(j)) + ...
+                         (lambda-1).*log(y) + (alpha_k(j)-1).*log(-log(y));
+                dens(:,j) = pi_k(j) * exp(logpdf);
+            end
+            loglik = sum(log(sum(dens,2)));
+            loglik_trace(iter) = loglik;
+            tau = dens ./ (sum(dens,2) + eps);
+            
+            % --- M-step: 更新pi ---
+            Nk = sum(tau,1);
+            pi_new = Nk / n;
+            
+            % --- M-step: 更新beta (使用Fisher scoring) ---
+            beta_new = beta_k;
+            for j = 1:K
+                b_curr = beta_k(:,j);
+                a_curr = alpha_k(j);
+                
+                for newton_iter = 1:10 % 內部牛頓迭代
+                    eta = X * b_curr;
+                    mu = 1./(1+exp(-eta));
+                    mu = max(min(mu, 1-eps), eps);
+                    
+                    mu_alpha = mu.^(1/a_curr);
+                    one_mu = max(1 - mu_alpha, eps);
+                    lambda = mu_alpha ./ one_mu;
+                    lny = log(y + eps);
+                    
+                    % 計算分數函數
+                    term1 = (1-mu)./one_mu;
+                    term2 = (mu_alpha.*(1-mu).*lny)./(a_curr*(one_mu).^2);
+                    score = sum(tau(:,j).*(term1 + term2).*X, 1)';
+                    
+                    % 計算Fisher信息矩陣
+                    fisher = zeros(p,p);
+                    for i=1:n
+                        xi = X(i,:)';
+                        fisher = fisher + tau(i,j)*((1-mu(i))^2)/(a_curr*(one_mu(i))^2)*(xi*xi');
+                    end
+                    fisher = fisher + reg*eye(p);
+                    
+                    % 更新beta
+                    if rcond(fisher) > eps
+                        delta = fisher \ score;
+                    else
+                        delta = pinv(fisher) * score;
+                    end
+                    
+                    % 限制更新步長
+                    step_size = min(1, 1/norm(delta));
+                    b_curr = b_curr + step_size * delta;
+                end
+                beta_new(:,j) = b_curr;
+            end
+            
+            % --- M-step: 更新alpha ---
+            alpha_new = alpha_k;
+            for j = 1:K
+                delta = log(alpha_k(j)); % 使用log轉換確保alpha>0
+                
+                for newton_iter = 1:10
+                    alpha = exp(delta);
+                    eta = X * beta_new(:,j);
+                    mu = 1./(1+exp(-eta));
+                    mu_alpha = mu.^(1/alpha);
+                    one_mu = 1 - mu_alpha;
+                    lny = log(y); 
+                    logu = log(mu); 
+                    loglogy = log(-log(y));
+                    
+                    % 計算分數函數
+                    d_ll_dalpha = -logu./(alpha^2 .* one_mu);
+                    d_lambda = (mu_alpha./one_mu) .* d_ll_dalpha;
+                    term1 = log(mu_alpha./one_mu);
+                    term2 = d_ll_dalpha .* alpha;
+                    term3 = d_lambda .* lny;
+                    dlogpdf = term1 + term2 + term3 - psi(alpha) + loglogy;
+                    score_a = alpha * sum(tau(:,j) .* dlogpdf);
+                    
+                    % 計算Fisher信息
+                    trig = psi(1,alpha);
+                    t1 = -(logu.*(2*alpha - logu - 2*alpha.*mu_alpha)) ./ (alpha .* one_mu.^2);
+                    t2 = alpha^2*trig;
+                    t3 = alpha*psi(alpha);
+                    t4 = -alpha*log(log(1./y));
+                    t5 = -alpha*log(mu_alpha./one_mu);
+                    fisher_a = sum(tau(:,j).*(t1+t2+t3+t4+t5)) + reg;
+                    
+                    % 更新alpha
+                    delta = delta + score_a / fisher_a;
+                end
+                alpha_new(j) = exp(delta);
+            end
+            
+            % --- 收斂檢查 ---
+            param_change = norm([pi_new, beta_new(:)', alpha_new] - ...
+                               [pi_k, beta_k(:)', alpha_k]) / ...
+                          norm([pi_k, beta_k(:)', alpha_k] + eps);
+            
+            if param_change < tol && iter > 10
+                converged = true;
+                break;
+            end
+            
+            % 更新參數
+            pi_k = pi_new;
+            beta_k = beta_new;
+            alpha_k = alpha_new;
+            prev_loglik = loglik;
+        end
+        
+        % === 解決label switching問題 ===
+        % 方法1: 根據截距項排序 (簡單但可能不總是有效)
+        [~, sort_idx] = sort(beta_k(1,:));
+        pi_k = pi_k(sort_idx);
+        beta_k = beta_k(:,sort_idx);
+        alpha_k = alpha_k(sort_idx);
+        
+        % 方法2: 與真實參數對齊 (更可靠)
+        % 計算所有可能的排列組合
+        permutations = perms(1:K);
+        best_dist = Inf;
+        best_perm = 1:K;
+        
+        for perm_idx = 1:size(permutations,1)
+            perm = permutations(perm_idx,:);
+            
+            % 計算距離度量 (結合beta和alpha的差異)
+            dist = norm(beta_k(:,perm) - beta_true, 'fro') + ...
+                   norm(alpha_k(perm) - alpha_true);
+            
+            if dist < best_dist
+                best_dist = dist;
+                best_perm = perm;
+            end
+        end
+        
+        % 重新排列估計參數
+        pi_k = pi_k(best_perm);
+        beta_k = beta_k(:,best_perm);
+        alpha_k = alpha_k(best_perm);
+        
+        % === 儲存結果 ===
+        if converged && all(isfinite(pi_k)) && all(isfinite(alpha_k)) && all(isfinite(beta_k(:)))
+            pi_all(s,:) = pi_k;
+            beta_all(s,:,:) = beta_k;
+            alpha_all(s,:) = alpha_k;
+            loglik_all(s) = loglik;
+            valid_idx(s) = true;
+        end
+        
+        time_all(s) = toc(sim_timer); % 儲存單次模擬耗時
+        
+    catch ME
+        fprintf('模擬 %d 出錯: %s\n', s, ME.message);
+        continue;
+    end
+end
+
+total_time = toc(total_timer);
+fprintf('\n模擬總耗時：%.2f 秒\n', total_time);
+fprintf('平均每次模擬耗時：%.2f 秒\n', mean(time_all(valid_idx)));
+fprintf('有效模擬次數：%d / %d\n', sum(valid_idx), num_sim);
+
+%% ===== 統計結果 =====
+valid_runs = sum(valid_idx);
+if valid_runs == 0
+    error('沒有有效的模擬結果！');
+end
+
+% 提取有效結果
+pi_valid = pi_all(valid_idx,:);
+beta_valid = beta_all(valid_idx,:,:);
+alpha_valid = alpha_all(valid_idx,:);
+
+% ===== 計算統計量 =====
+% 平均值
+pi_mean = mean(pi_valid, 1);
+beta_mean = squeeze(mean(beta_valid, 1));
+alpha_mean = mean(alpha_valid, 1);
+
+% 標準差
+pi_std = std(pi_valid, [], 1);
+beta_std = squeeze(std(beta_valid, [], 1));
+alpha_std = std(alpha_valid, [], 1);
+
+% 偏差
+pi_bias = pi_mean - pi_true;
+beta_bias = beta_mean - beta_true;
+alpha_bias = alpha_mean - alpha_true;
+
+% RMSE
+pi_rmse = sqrt(mean((pi_valid - pi_true).^2, 1));
+beta_rmse = squeeze(sqrt(mean((beta_valid - reshape(beta_true,1,p,K)).^2, 1)));
+alpha_rmse = sqrt(mean((alpha_valid - alpha_true).^2, 1));
+
+%% ===== 顯示結果 =====
+fprintf('\n======== 模擬結果 ========\n');
+
+fprintf('\n== 真實參數 ==\n');
+fprintf('混合比例 pi:    [%.2f, %.2f]\n', pi_true(1), pi_true(2));
+fprintf('回歸係數 beta:\n');
+disp(beta_true);
+fprintf('形狀參數 alpha: [%.2f, %.2f]\n', alpha_true(1), alpha_true(2));
+
+fprintf('\n== 估計結果 (平均值 ± 標準差) ==\n');
+fprintf('混合比例 pi:    [%.4f ± %.4f, %.4f ± %.4f]\n', ...
+        pi_mean(1), pi_std(1), pi_mean(2), pi_std(2));
+    
+fprintf('\n回歸係數 beta:\n');
+for k = 1:K
+    fprintf('組別 %d:\n', k);
+    for p_idx = 1:p
+        fprintf('  beta%d: %.4f ± %.4f\n', p_idx-1, ...
+                beta_mean(p_idx,k), beta_std(p_idx,k));
+    end
+end
+
+fprintf('\n形狀參數 alpha: [%.4f ± %.4f, %.4f ± %.4f]\n', ...
+        alpha_mean(1), alpha_std(1), alpha_mean(2), alpha_std(2));
+
+fprintf('\n== 偏差與RMSE ==\n');
+fprintf('混合比例 pi:\n');
+fprintf('  偏差: [%.4f, %.4f]\n', pi_bias(1), pi_bias(2));
+fprintf('  RMSE: [%.4f, %.4f]\n', pi_rmse(1), pi_rmse(2));
+
+fprintf('\n回歸係數 beta:\n');
+for k = 1:K
+    fprintf('組別 %d:\n', k);
+    for p_idx = 1:p
+        fprintf('  beta%d: 偏差=%.4f, RMSE=%.4f\n', p_idx-1, ...
+                beta_bias(p_idx,k), beta_rmse(p_idx,k));
+    end
+end
+
+fprintf('\n形狀參數 alpha:\n');
+fprintf('  偏差: [%.4f, %.4f]\n', alpha_bias(1), alpha_bias(2));
+fprintf('  RMSE: [%.4f, %.4f]\n', alpha_rmse(1), alpha_rmse(2));
+
