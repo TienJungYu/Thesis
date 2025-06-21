@@ -2,16 +2,16 @@ clc; clear ; close all;
 
 
 %% ====== 模擬設定 ======
-n = 1000;       % 樣本數
+n = 500;       % 樣本數
 p = 2;         % 預測變量數 (含截距項)
 K = 2;         % 組別數量
 num_sim = 500; % 模擬次數
 
 % 真實參數值
 beta_true  = [1 -1;   % 每行是第k組的beta (第一列是截距)
-              -1 1];  
+              1  1];  
 alpha_true = [2, 4];  % 形狀參數
-pi_true    = [0.6, 0.4]; % 混合比例
+pi_true    = [0.5, 0.5]; % 混合比例
 
 % 儲存結果的變數
 beta_all  = NaN(num_sim, p, K);
@@ -384,3 +384,5 @@ xlabel('x', 'FontSize', 14);
 ylabel('u', 'FontSize', 14);
 legend('Location','bestoutside', 'FontSize', 10);
 grid on; box on; hold off;
+
+
